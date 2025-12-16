@@ -9,10 +9,6 @@ using System.Globalization;
 namespace CRIPTObackend.Controllers
 {
 
-
-	//a ver si se guarda...
-
-
 	[Route("transacciones")]
 	[ApiController]
 	public class TransaccionesController : Controller
