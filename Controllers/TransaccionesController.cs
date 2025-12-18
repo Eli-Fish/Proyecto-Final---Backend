@@ -31,13 +31,13 @@ namespace CRIPTObackend.Controllers
 
 			if (transaccionDto.Tipo.ToLower() == "venta")
 			{
-				decimal totalCompras = await _context.transacciones
-					.Where(t => t.ClienteId == transaccionDto.ClienteId && t.CodigoCripto == transaccionDto.CodigoCripto && t.Tipo == "compra")
-					.SumAsync(t => t.CantidadCripto);
+				decimal totalCompras = await _context.transacciones.Where
+					(trans => trans.ClienteId == transaccionDto.ClienteId && trans.CodigoCripto == transaccionDto.CodigoCripto && trans.Tipo == "compra")
+					.SumAsync(trans => trans.CantidadCripto);
 
-				decimal totalVentas = await _context.transacciones
-					.Where(t => t.ClienteId == transaccionDto.ClienteId && t.CodigoCripto == transaccionDto.CodigoCripto && t.Tipo == "venta")
-					.SumAsync(t => t.CantidadCripto);
+				decimal totalVentas = await _context.transacciones.Where
+					(trans => trans.ClienteId == transaccionDto.ClienteId && trans.CodigoCripto == transaccionDto.CodigoCripto && trans.Tipo == "venta")
+					.SumAsync(trans => trans.CantidadCripto);
 
 				if (transaccionDto.CantidadCripto > (totalCompras - totalVentas))
 					return BadRequest("No se puede vender más de lo que posee el cliente.");
@@ -50,32 +50,27 @@ namespace CRIPTObackend.Controllers
 
 			Console.WriteLine(json);
 
-			decimal mejorPrecio = 0;
+			decimal mejorPrecio = decimal.MaxValue;
 
 			foreach (var exchange in json)
 			{
 				var datos = exchange.Value;
 
 				// Ignorar nodos que no contienen precios
-				if (datos["totalAsk"] == null && datos["totalBid"] == null)
-					continue;
-
-				string askStr = datos["totalAsk"]?.ToString() ?? "0";
-				string bidStr = datos["totalBid"]?.ToString() ?? "0";
+				if (datos["totalAsk"] == null && datos["totalBid"] == null) continue;
 
 				decimal ask = 0, bid = 0;
 
-				// Convertir Infinity, NaN o vacíos a 0
-				decimal.TryParse(askStr, NumberStyles.Any, CultureInfo.InvariantCulture, out ask);
-				decimal.TryParse(bidStr, NumberStyles.Any, CultureInfo.InvariantCulture, out bid);
+				decimal.TryParse(datos["totalAsk"]?.ToString() ?? "0", NumberStyles.Any, CultureInfo.InvariantCulture, out ask);
+				decimal.TryParse(datos["totalBid"]?.ToString() ?? "0", NumberStyles.Any, CultureInfo.InvariantCulture, out bid);
 
-				mejorPrecio = Math.Max(mejorPrecio, Math.Max(ask, bid));
+				decimal precioExchange = Math.Min(ask, bid);
+
+				if (precioExchange > 0) mejorPrecio = Math.Min(mejorPrecio, precioExchange);
 			}
 
-
-			if (mejorPrecio == 0)
-				return BadRequest("No hay precio disponible para esta criptomoneda en este momento. ");
-
+			if (mejorPrecio == 0) return BadRequest("no hay precio disponible para esta criptomoneda en este momento.");
+			
 			decimal montoTotal = mejorPrecio * transaccionDto.CantidadCripto;
 
 			Transaccion transaccion = new Transaccion
@@ -100,67 +95,41 @@ namespace CRIPTObackend.Controllers
 			var query = _context.transacciones.AsQueryable();
 
 			if (clienteId.HasValue)
-				query = query.Where(t => t.ClienteId == clienteId.Value);
+				query = query.Where(trans => trans.ClienteId == clienteId.Value);
 
-			var lista = await query
-				.OrderByDescending(t => t.Fecha)
-				.ToListAsync();
+			var trans = await query.OrderByDescending(trans => trans.Fecha).ToListAsync();
 
-			var http = new HttpClient();
-
-			var resultado = new List<object>();
-
-			foreach (var t in lista)
+			var transaccionDto = trans.Select(trans => new TransaccionDTO
 			{
-				// Precio actual desde CriptoYa
-				string urlPrecioCrypto = $"https://criptoya.com/api/{t.CodigoCripto}/ars/1";
-				var response = await http.GetStringAsync(urlPrecioCrypto);
-				var json = JObject.Parse(response);
+				ClienteId = trans.ClienteId,
+				Tipo = trans.Tipo,
+				CodigoCripto = trans.CodigoCripto,
+				Fecha = trans.Fecha,
+				CantidadCripto = trans.CantidadCripto,
+				Monto = trans.Monto
+			});
 
-				decimal mejorPrecio = json.Properties()
-					.Select(p => (decimal?)p.Value["totalAsk"])
-					.Where(v => v.HasValue)
-					.Max() ?? 0;
-
-				decimal montoActual = mejorPrecio * t.CantidadCripto;
-
-				resultado.Add(new
-				{
-					id = t.Id,
-					tipo = t.Tipo,
-					codigoCripto = t.CodigoCripto,
-					cantidadCripto = t.CantidadCripto,
-					fecha = t.Fecha.ToString("yyyy-MM-ddTHH:mm:ss"),
-					clienteId = t.ClienteId,
-
-					// monto guardado en la DB (lo que costó al momento de la compra)
-					montoOriginal = t.Monto,
-
-					// monto actualizado según CriptoYa
-					montoActualizado = montoActual
-				});
-			}
-
-			return Ok(resultado);
+			return Ok(trans);
 		}
 
 		[HttpGet("{id}")]
-		public async Task<IActionResult> ObtenerTransaccion(int id)
+		public async Task<ActionResult<TransaccionDTO>> GetById(int id)
 		{
-			var transaccion = await _context.transacciones.FindAsync(id);
-			if (transaccion == null)
-				return NotFound("Transacción no encontrada.");
+			var trans = await _context.transacciones.Include(trans => trans.ClienteId).FirstOrDefaultAsync(trans => trans.Id == id);
 
-			return Ok(new
+			if (trans == null) return NotFound();
+
+			var dto = new TransaccionDTO
 			{
-				id = transaccion.Id,
-				tipo = transaccion.Tipo,
-				codigoCripto = transaccion.CodigoCripto,
-				clienteId = transaccion.ClienteId,
-				cantidadCripto = transaccion.CantidadCripto,
-				monto = transaccion.Monto,
-				fecha = transaccion.Fecha
-			});
+				ClienteId = trans.ClienteId,
+				Tipo = trans.Tipo,
+				CodigoCripto = trans.CodigoCripto,
+				Fecha = trans.Fecha,
+				CantidadCripto = trans.CantidadCripto,
+				Monto = trans.Monto
+			};
+
+			return Ok(dto);
 		}
 
 		[HttpPut("{id}")]
@@ -168,28 +137,46 @@ namespace CRIPTObackend.Controllers
 		{
 			var trans = await _context.transacciones.FindAsync(id);
 			if (trans == null)
-				return NotFound("Transacción no encontrada");
-
-			trans.CodigoCripto = dto.CodigoCripto;
-			trans.CantidadCripto = dto.CantidadCripto;
-			trans.Tipo = dto.Tipo;
-			trans.ClienteId = dto.ClienteId;  
+				return NotFound($"Transacción {id} no encontrada");
 
 			await _context.SaveChangesAsync();
-			return Ok("Transacción modificada");
+
+			var res = new TransaccionDTO
+			{
+				ClienteId = trans.ClienteId,
+				Tipo = trans.Tipo,
+				CodigoCripto = trans.CodigoCripto,
+				Fecha = trans.Fecha,
+				CantidadCripto = trans.CantidadCripto,
+				Monto = trans.Monto
+			};
+
+			return Ok($"Transacción {id} modificada correctamente. '\n' {res}");
 		}
 
 		[HttpDelete("{id}")]
 		public async Task<IActionResult> BorrarTransaccion(int id)
 		{
-			var transaccion = await _context.transacciones.FindAsync(id);
-			if (transaccion == null)
-				return NotFound("Transacción no encontrada.");
+			var trans = await _context.transacciones.FindAsync(id);
 
-			_context.transacciones.Remove(transaccion);
+			if (trans == null)
+				return NotFound($"Transacción {id} no encontrada.");
+
+			_context.transacciones.Remove(trans);
+
 			await _context.SaveChangesAsync();
 
-			return Ok("Transacción eliminada correctamente.");
+			var res = new TransaccionDTO
+			{
+				ClienteId = trans.ClienteId,
+				Tipo = trans.Tipo,
+				CodigoCripto = trans.CodigoCripto,
+				Fecha = trans.Fecha,
+				CantidadCripto = trans.CantidadCripto,
+				Monto = trans.Monto
+			};
+
+			return Ok($"Transacción {id} eliminada correctamente. '\n' {res}");
 		}
 
 	}

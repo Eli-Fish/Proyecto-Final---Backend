@@ -23,7 +23,7 @@ namespace CRIPTObackend.Controllers
 				return BadRequest("No se enviaron datos");
 
 			_context.Clientes.Add(cliente);
-			_context.SaveChanges(); //
+			_context.SaveChanges(); 
 
 			return Ok(new { mensaje = "Cliente creado correctamente" });
 		}
